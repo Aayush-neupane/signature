@@ -9,6 +9,7 @@ import {
   canvasToBlob,
   downloadBlob,
   drawStroke,
+  finalizeStroke,
   redrawAll,
   renderCroppedTransparent,
   type Point,
@@ -143,7 +144,7 @@ const SignatureCanvas = forwardRef<SignatureCanvasHandle, Props>(
       }
       const out = renderCroppedTransparent(strokesRef.current, {
         padding: 24,
-        scale: 3,
+        scale: 4,
         color: optsRef.current.inkColor,
       });
       if (!out) {
@@ -182,6 +183,11 @@ const SignatureCanvas = forwardRef<SignatureCanvasHandle, Props>(
 
       let activePointerId: number | null = null;
       let lastDrawnIndex = 0;
+      // Stabilizer state: `follow` trails the raw pointer, filtering out
+      // hand jitter in real time. `lastRaw` preserves the true lift point.
+      let follow: Point | null = null;
+      let lastRaw: Point | null = null;
+      const FOLLOW = 0.5;
 
       const appendPoint = (p: Point) => {
         const current = drawingRef.current;
@@ -219,8 +225,11 @@ const SignatureCanvas = forwardRef<SignatureCanvasHandle, Props>(
           /* noop — capture unsupported */
         }
         const rect = canvas.getBoundingClientRect();
+        const start = eventPoint(e, rect);
+        follow = start;
+        lastRaw = start;
         drawingRef.current = {
-          points: [eventPoint(e, rect)],
+          points: [start],
           width: optsRef.current.strokeWidth,
         };
         lastDrawnIndex = 1;
@@ -241,32 +250,62 @@ const SignatureCanvas = forwardRef<SignatureCanvasHandle, Props>(
           typeof e.getCoalescedEvents === "function" && e.getCoalescedEvents().length > 0
             ? e.getCoalescedEvents()
             : [e];
-        for (const ev of events) appendPoint(eventPoint(ev, rect));
+        for (const ev of events) {
+          const raw = eventPoint(ev, rect);
+          lastRaw = raw;
+          // Ease the recorded point toward the raw pointer: fast moves
+          // stay responsive, tiny shakes get absorbed.
+          const f = follow ?? raw;
+          follow = {
+            x: f.x + (raw.x - f.x) * FOLLOW,
+            y: f.y + (raw.y - f.y) * FOLLOW,
+            pressure: raw.pressure,
+            time: raw.time,
+          };
+          appendPoint(follow);
+        }
+      };
+
+      /** Commit a finished stroke: restore the true tail, auto-refine, repaint. */
+      const commitStroke = (minPoints: number) => {
+        const finished = drawingRef.current;
+        drawingRef.current = null;
+        follow = null;
+        if (finished && finished.points.length >= minPoints) {
+          const tail = lastRaw;
+          const head =
+            finished.points.length > 0
+              ? finished.points[finished.points.length - 1]
+              : null;
+          // The stabilizer lags behind the pen — reattach the true endpoint
+          // so stroke tails aren't clipped.
+          if (
+            tail &&
+            head &&
+            Math.hypot(tail.x - head.x, tail.y - head.y) > 0.4
+          ) {
+            finished.points.push(tail);
+          }
+          strokesRef.current.push(finalizeStroke(finished));
+        }
+        // Repaint: shows the refined stroke, or clears partial ink when
+        // nothing was committed.
+        redraw();
+        lastRaw = null;
+        emitChange();
       };
 
       const endStroke = (e: PointerEvent) => {
         if (e.pointerId !== activePointerId) return;
         activePointerId = null;
-        const finished = drawingRef.current;
-        drawingRef.current = null;
-        if (finished && finished.points.length > 0) {
-          strokesRef.current.push(finished);
-        }
-        emitChange();
+        commitStroke(1);
       };
 
       const onPointerCancel = (e: PointerEvent) => {
         if (e.pointerId !== activePointerId) return;
         activePointerId = null;
         // Keep a cancelled stroke if it already has visible ink.
-        const finished = drawingRef.current;
-        drawingRef.current = null;
-        if (finished && finished.points.length > 1) {
-          strokesRef.current.push(finished);
-        } else {
-          redraw();
-        }
-        emitChange();
+        commitStroke(2);
       };
 
       canvas.addEventListener("pointerdown", onPointerDown);

@@ -167,6 +167,238 @@ export function renderCroppedTransparent(
   return out;
 }
 
+/* ---------- Auto-refine ---------- */
+
+function pointDist(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Drop near-stationary samples that only contribute jitter. Keeps endpoints. */
+function decimate(points: Point[], minDist = 0.8): Point[] {
+  if (points.length < 3) return points.slice();
+  const out = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    if (pointDist(points[i], out[out.length - 1]) >= minDist) out.push(points[i]);
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+/** Turn angle at b (0 = straight, PI = hairpin). */
+function turningAngle(a: Point, b: Point, c: Point): number {
+  const v1x = b.x - a.x;
+  const v1y = b.y - a.y;
+  const v2x = c.x - b.x;
+  const v2y = c.y - b.y;
+  const l1 = Math.hypot(v1x, v1y);
+  const l2 = Math.hypot(v2x, v2y);
+  if (l1 < 1e-6 || l2 < 1e-6) return 0;
+  return Math.abs(
+    Math.atan2(v1x * v2y - v1y * v2x, v1x * v2x + v1y * v2y),
+  );
+}
+
+function distToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+}
+
+/** Perpendicular distance to the infinite line through a and b. */
+function distToLine(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return pointDist(p, a);
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+}
+
+/**
+ * Trim pen-down / pen-lift hooks: short initial/final jabs that shoot
+ * backwards against the stroke's emerging direction. Conservative —
+ * only touches clear reversals under 12px with solid context behind them.
+ */
+function trimHooks(points: Point[]): Point[] {
+  const LOOK = 8;
+  const MIN_CONTEXT = 10;
+  let pts = points;
+  for (let k = 0; k < 3 && pts.length > 5; k++) {
+    const d1x = pts[1].x - pts[0].x;
+    const d1y = pts[1].y - pts[0].y;
+    const ref = pts[Math.min(LOOK, pts.length - 1)];
+    const drx = ref.x - pts[0].x;
+    const dry = ref.y - pts[0].y;
+    const l1 = Math.hypot(d1x, d1y);
+    const lr = Math.hypot(drx, dry);
+    if (l1 < 1e-6 || lr < MIN_CONTEXT || l1 > 12) break;
+    if ((d1x * drx + d1y * dry) / (l1 * lr) < -0.15) pts = pts.slice(1);
+    else break;
+  }
+  for (let k = 0; k < 3 && pts.length > 5; k++) {
+    const n = pts.length;
+    const d1x = pts[n - 1].x - pts[n - 2].x;
+    const d1y = pts[n - 1].y - pts[n - 2].y;
+    const ref = pts[Math.max(0, n - 1 - LOOK)];
+    const drx = pts[n - 1].x - ref.x;
+    const dry = pts[n - 1].y - ref.y;
+    const l1 = Math.hypot(d1x, d1y);
+    const lr = Math.hypot(drx, dry);
+    if (l1 < 1e-6 || lr < MIN_CONTEXT || l1 > 12) break;
+    if ((d1x * drx + d1y * dry) / (l1 * lr) < -0.15) pts = pts.slice(0, -1);
+    else break;
+  }
+  return pts;
+}
+
+/**
+ * Remove lone outlier spikes: a single sample jumping off the line while
+ * the samples two steps out on both sides stay on it. Genuine corners
+ * (sustained direction changes) never match this pattern.
+ */
+function removeSpikes(points: Point[]): Point[] {
+  if (points.length < 6) return points.slice();
+  const out = [points[0], points[1]];
+  for (let i = 2; i < points.length - 2; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const c = points[i + 1];
+    const isolated =
+      distToLine(points[i - 2], a, c) < 3.5 &&
+      distToLine(points[i + 2], a, c) < 3.5;
+    if (isolated && distToSegment(b, a, c) > 5) continue;
+    out.push(b);
+  }
+  out.push(points[points.length - 2], points[points.length - 1]);
+  return out;
+}
+
+/**
+ * Corner-aware relaxation: smooths straight runs firmly while leaving
+ * genuine corners, loops, and flicks alone. Endpoints stay fixed.
+ */
+function adaptiveRelax(points: Point[], passes = 3, strength = 0.65): Point[] {
+  const STRAIGHT = (18 * Math.PI) / 180;
+  const CORNER = (65 * Math.PI) / 180;
+  let cur = points;
+  for (let p = 0; p < passes; p++) {
+    const next = [cur[0]];
+    for (let i = 1; i < cur.length - 1; i++) {
+      const a = cur[i - 1];
+      const b = cur[i];
+      const c = cur[i + 1];
+      const w =
+        (1 - smoothstep(STRAIGHT, CORNER, turningAngle(a, b, c))) * strength;
+      next.push({
+        x: b.x + ((a.x + c.x) / 2 - b.x) * w,
+        y: b.y + ((a.y + c.y) / 2 - b.y) * w,
+        pressure: b.pressure,
+        time: b.time,
+      });
+    }
+    next.push(cur[cur.length - 1]);
+    cur = next;
+  }
+  return cur;
+}
+
+/** Douglas-Peucker simplification: drop redundant points, keep shape. */
+function simplify(points: Point[], eps = 0.6): Point[] {
+  if (points.length < 4) return points.slice();
+  const keep = new Array<boolean>(points.length).fill(false);
+  keep[0] = true;
+  keep[points.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  let range = stack.pop();
+  while (range !== undefined) {
+    const [s, e] = range;
+    let maxD = 0;
+    let idx = -1;
+    for (let i = s + 1; i < e; i++) {
+      const d = distToSegment(points[i], points[s], points[e]);
+      if (d > maxD) {
+        maxD = d;
+        idx = i;
+      }
+    }
+    if (maxD > eps && idx > 0) {
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+    range = stack.pop();
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+function catmullRomSample(
+  p0: Point,
+  p1: Point,
+  p2: Point,
+  p3: Point,
+  t: number,
+): Point {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const blend = (a: number, b: number, c: number, d: number) =>
+    0.5 *
+    (2 * b +
+      (-a + c) * t +
+      (2 * a - 5 * b + 4 * c - d) * t2 +
+      (-a + 3 * b - 3 * c + d) * t3);
+  return {
+    x: blend(p0.x, p1.x, p2.x, p3.x),
+    y: blend(p0.y, p1.y, p2.y, p3.y),
+    pressure: p1.pressure + (p2.pressure - p1.pressure) * t,
+    time: p1.time + (p2.time - p1.time) * t,
+  };
+}
+
+/** Subdivide spans along a Catmull-Rom spline for silky, defined curves. */
+function resample(points: Point[], perSpan = 3): Point[] {
+  if (points.length < 3) return points.slice();
+  const out: Point[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    out.push(p1);
+    if (pointDist(p1, p2) > 1.5) {
+      for (let j = 1; j <= perSpan; j++) {
+        out.push(catmullRomSample(p0, p1, p2, p3, j / (perSpan + 1)));
+      }
+    }
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+/**
+ * Auto-refine a finished stroke: trim pen hooks, kill spikes, drop
+ * jitter samples, corner-aware smoothing, simplify, then resample along
+ * a spline for clean, well-defined curves. Short taps and dots pass
+ * through untouched.
+ */
+export function finalizeStroke(stroke: Stroke): Stroke {
+  if (stroke.points.length < 4) return stroke;
+  let pts = trimHooks(stroke.points);
+  if (pts.length < 4) return { ...stroke, points: pts };
+  pts = simplify(adaptiveRelax(decimate(removeSpikes(pts)), 3));
+  if (pts.length < 3) return { ...stroke, points: pts };
+  return { ...stroke, points: resample(pts, 4) };
+}
+
 export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
