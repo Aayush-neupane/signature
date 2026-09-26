@@ -382,6 +382,18 @@ body {
   cursor: not-allowed;
 }
 
+.format-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.format-row .btn {
+  flex: 1;
+  justify-content: center;
+  font-size: 12px;
+  padding: 9px 0;
+}
+
 .hint {
   margin: 10px 4px 0;
   font-size: 13px;
@@ -437,6 +449,10 @@ body {
   margin-top: auto;
   padding-top: 36px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
 }
 
 .site-footer p {
@@ -444,6 +460,45 @@ body {
   font-size: 12px;
   color: var(--faint);
   letter-spacing: 0.02em;
+}
+
+.dev-credit {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  text-decoration: none;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  max-width: 680px;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.dev-credit:hover {
+  color: var(--text);
+}
+
+.dev-credit-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  object-fit: cover;
+}
+
+.dev-credit-name {
+  color: var(--text);
+  text-underline-offset: 4px;
+}
+
+.dev-credit:hover .dev-credit-name {
+  text-decoration: underline;
 }
 
 /* ---------- Toast ---------- */

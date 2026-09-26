@@ -403,6 +403,62 @@ export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
+export function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  const flat = document.createElement("canvas");
+  flat.width = canvas.width;
+  flat.height = canvas.height;
+  const ctx = flat.getContext("2d");
+  if (!ctx) return Promise.resolve(null);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, flat.width, flat.height);
+  ctx.drawImage(canvas, 0, 0);
+  return new Promise((resolve) => flat.toBlob(resolve, "image/jpeg", 0.92));
+}
+
+function escXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Vector export: strokes become round-capped polylines at their base
+ * widths, cropped to the same padded bounds as the PNG export.
+ */
+export function strokesToSvg(
+  strokes: Stroke[],
+  opts: { padding?: number; color: string },
+): string | null {
+  const bounds = getStrokesBounds(strokes);
+  if (!bounds) return null;
+  const padding = opts.padding ?? 24;
+  let maxWidth = 0;
+  for (const s of strokes) maxWidth = Math.max(maxWidth, s.width);
+  const bleed = maxWidth / 2 + 2;
+  const minX = Math.floor(bounds.minX - bleed - padding);
+  const minY = Math.floor(bounds.minY - bleed - padding);
+  const w = Math.max(1, Math.ceil(bounds.maxX + bleed + padding) - minX);
+  const h = Math.max(1, Math.ceil(bounds.maxY + bleed + padding) - minY);
+  const paths = strokes
+    .map((s) => {
+      if (s.points.length === 0) return "";
+      if (s.points.length === 1) {
+        const p = s.points[0];
+        return `<circle cx="${(p.x - minX).toFixed(2)}" cy="${(p.y - minY).toFixed(2)}" r="${(s.width / 2).toFixed(2)}" fill="${escXml(opts.color)}"/>`;
+      }
+      const d =
+        `M${(s.points[0].x - minX).toFixed(2)} ${(s.points[0].y - minY).toFixed(2)}` +
+        s.points.slice(1).map((p) => `L${(p.x - minX).toFixed(2)} ${(p.y - minY).toFixed(2)}`).join("");
+      return `<path d="${d}" fill="none" stroke="${escXml(opts.color)}" stroke-width="${s.width.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    })
+    .filter(Boolean)
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">${paths}</svg>`;
+}
+
+export function downloadText(text: string, filename: string, mime: string) {
+  const blob = new Blob([text], { type: mime });
+  downloadBlob(blob, filename);
+}
+
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

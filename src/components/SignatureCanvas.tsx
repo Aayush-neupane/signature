@@ -7,11 +7,14 @@ import {
 } from "react";
 import {
   canvasToBlob,
+  canvasToJpegBlob,
   downloadBlob,
+  downloadText,
   drawStroke,
   finalizeStroke,
   redrawAll,
   renderCroppedTransparent,
+  strokesToSvg,
   type Point,
   type Stroke,
 } from "../lib/signature";
@@ -20,6 +23,8 @@ export interface SignatureCanvasHandle {
   clear: () => void;
   undo: () => void;
   download: () => Promise<boolean>;
+  downloadJpg: () => Promise<boolean>;
+  downloadSvg: () => Promise<boolean>;
   isEmpty: () => boolean;
   getStrokeCount: () => number;
 }
@@ -137,41 +142,85 @@ const SignatureCanvas = forwardRef<SignatureCanvasHandle, Props>(
       emitChange();
     }, [emitChange, redraw]);
 
-    const download = useCallback(async () => {
-      if (strokesRef.current.length === 0) {
-        callbacksRef.current.onDownloadError("Draw your signature first.");
-        return false;
-      }
-      const out = renderCroppedTransparent(strokesRef.current, {
-        padding: 24,
-        scale: 4,
-        color: optsRef.current.inkColor,
-      });
-      if (!out) {
-        callbacksRef.current.onDownloadError("Draw your signature first.");
-        return false;
-      }
-      const blob = await canvasToBlob(out);
-      if (!blob) {
-        callbacksRef.current.onDownloadError("Could not create the PNG. Try again.");
-        return false;
-      }
-      downloadBlob(blob, "signature.png");
-      callbacksRef.current.onDownloaded();
-      return true;
-    }, []);
+  const download = useCallback(async () => {
+    if (strokesRef.current.length === 0) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    const out = renderCroppedTransparent(strokesRef.current, {
+      padding: 24,
+      scale: 4,
+      color: optsRef.current.inkColor,
+    });
+    if (!out) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    const blob = await canvasToBlob(out);
+    if (!blob) {
+      callbacksRef.current.onDownloadError("Could not create the PNG. Try again.");
+      return false;
+    }
+    downloadBlob(blob, "signature.png");
+    callbacksRef.current.onDownloaded();
+    return true;
+  }, []);
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        clear,
-        undo,
-        download,
-        isEmpty: () => strokesRef.current.length === 0,
-        getStrokeCount: () => strokesRef.current.length,
-      }),
-      [clear, undo, download],
-    );
+  const downloadJpg = useCallback(async () => {
+    if (strokesRef.current.length === 0) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    const out = renderCroppedTransparent(strokesRef.current, {
+      padding: 24,
+      scale: 4,
+      color: optsRef.current.inkColor,
+    });
+    if (!out) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    const blob = await canvasToJpegBlob(out);
+    if (!blob) {
+      callbacksRef.current.onDownloadError("Could not create the JPG. Try again.");
+      return false;
+    }
+    downloadBlob(blob, "signature.jpg");
+    callbacksRef.current.onDownloaded();
+    return true;
+  }, []);
+
+  const downloadSvg = useCallback(async () => {
+    if (strokesRef.current.length === 0) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    const svg = strokesToSvg(strokesRef.current, {
+      padding: 24,
+      color: optsRef.current.inkColor,
+    });
+    if (!svg) {
+      callbacksRef.current.onDownloadError("Draw your signature first.");
+      return false;
+    }
+    downloadText(svg, "signature.svg", "image/svg+xml");
+    callbacksRef.current.onDownloaded();
+    return true;
+  }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      clear,
+      undo,
+      download,
+      downloadJpg,
+      downloadSvg,
+      isEmpty: () => strokesRef.current.length === 0,
+      getStrokeCount: () => strokesRef.current.length,
+    }),
+    [clear, undo, download, downloadJpg, downloadSvg],
+  );
 
     // Pointer handlers — attached imperatively so we can use
     // coalesced events and non-passive touch prevention.

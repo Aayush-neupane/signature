@@ -111,6 +111,19 @@ export default function App() {
     if (!ok) setIsBusy(false);
   }, [isBusy]);
 
+  const handleDownloadFormat = useCallback(
+    async (format: "jpg" | "svg") => {
+      if (isBusy) return;
+      setIsBusy(true);
+      const ok =
+        format === "jpg"
+          ? await canvasHandle.current?.downloadJpg()
+          : await canvasHandle.current?.downloadSvg();
+      if (!ok) setIsBusy(false);
+    },
+    [isBusy],
+  );
+
   // Keyboard shortcut: Cmd/Ctrl+Z to undo the last stroke.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -285,6 +298,24 @@ export default function App() {
               </svg>
               {isBusy ? "Preparing…" : "Download PNG"}
             </button>
+            <div className="format-row" role="group" aria-label="Other download formats">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={isEmpty || isBusy}
+                onClick={() => handleDownloadFormat("jpg")}
+              >
+                JPG
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={isEmpty || isBusy}
+                onClick={() => handleDownloadFormat("svg")}
+              >
+                SVG
+              </button>
+            </div>
           </div>
 
           {hint && (
@@ -317,6 +348,25 @@ export default function App() {
 
       <footer className="site-footer">
         <p>Transparent PNG · No account · No uploads</p>
+        <a
+          href="https://dynamic-aayush38.netlify.app"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Aayush Neupane — portfolio"
+          className="dev-credit"
+        >
+          <img
+            src="/logotrp.png"
+            alt="Aayush Neupane"
+            width={28}
+            height={28}
+            draggable={false}
+            className="dev-credit-logo"
+          />
+          <span>
+            Developed by <span className="dev-credit-name">Aayush Neupane</span>
+          </span>
+        </a>
       </footer>
 
       {toast && (
