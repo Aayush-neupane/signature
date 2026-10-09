@@ -349,14 +349,14 @@ export default function App() {
       <footer className="site-footer">
         <p>Transparent PNG · No account · No uploads</p>
         <a
-          href="https://dynamic-aayush38.netlify.app"
+          href="https://aayushnp.netlify.app"
           target="_blank"
           rel="noopener noreferrer"
           aria-label="Aayush Neupane — portfolio"
           className="dev-credit"
         >
           <img
-            src="/logotrp.png"
+            src="/logo-trp.png"
             alt="Aayush Neupane"
             width={28}
             height={28}
