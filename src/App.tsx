@@ -356,7 +356,7 @@ export default function App() {
           className="dev-credit"
         >
           <img
-            src="/logo-trp.png"
+            src="/logo.svg"
             alt="Aayush Neupane"
             width={28}
             height={28}
